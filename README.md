@@ -11,11 +11,11 @@ This readme should serve the reader as a complete technical guide for using the 
 
 ## **What is BACSQP & Who is it for?**
 
-The BACS Query Processor is a web-app developed for ISTRAC employees to access information related to Biometric Access Controllers installed across the campus. These controllers are installed for access authorization in various work areas in the campus.
+The BACS Query Processor is a web-app developed for users to access information related to Biometric Access Controllers installed across the campus. These controllers are installed for access authorization in various work areas in the campus.
 
 The main goal of the web-app is to convert natural-language questions into SQL queries using a local Large Language Model (LLM), execute those queries against a Microsoft SQL Server database, and return a single human-readable response.
 
-It can be used by authorized employees and non-employees of ISTRAC who may require such information for work-related needs.
+It can be used by authorized employees and non-employees who may require such information for work-related needs.
 
 ---
 
@@ -110,7 +110,8 @@ The server will keep waiting for requests to process unless Internal Server Erro
     6. “***All queries executed*** ” - It means there are no requests remaining to process.
 8. This should return a single response which is streamed from processor to frontend using StreamingResponse functionality of FastAPI, which has its own data format.
 The last response sent must be a “—-EOR—- & complete=True” message.
-9. For shutting down the server, press Ctrl + C once and wait for background activities to stop and for server to shut down completely.
+9. If the result is large, large=True message is also sent which activates a download button (connected to /download) route for downloading the results.
+10. For shutting down the server, press Ctrl + C once and wait for background activities to stop and for server to shut down completely.
 
 ---
 
