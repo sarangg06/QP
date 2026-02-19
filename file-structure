@@ -1,0 +1,8 @@
+project/
+│
+├── build_index.py        ← run once (offline)
+├── query_service.py      ← used at runtime
+├── normalizer.py         ← shared normalization logic
+├── data.pkl              ← parsed questions + sql
+├── embeddings.npy        ← saved vectors
+├── index.faiss           ← saved FAISS index
