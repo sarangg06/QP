@@ -1,0 +1,152 @@
+Since phrasing varies, lexical matching (regex/fuzzy) will fail long term.
+
+Use:
+
+Sentence Transformers (semantic understanding)
+
+Optional: FAISS (fast vector index)
+
+This gives:
+
+High accuracy
+
+Handles paraphrasing
+
+Scales easily
+
+Fast at inference
+
+🔥 Architecture Overview
+Step 1 — Embed All Questions (Offline Once)
+from sentence_transformers import SentenceTransformer
+import numpy as np
+import faiss
+
+model = SentenceTransformer('all-MiniLM-L6-v2')
+
+questions = [...]        # 2000 questions
+sql_queries = [...]      # matching SQL queries
+
+embeddings = model.encode(questions, convert_to_numpy=True)
+
+Step 2 — Build FAISS Index
+dimension = embeddings.shape[1]
+index = faiss.IndexFlatL2(dimension)
+index.add(embeddings)
+
+
+This makes search O(log n) instead of O(n).
+
+Step 3 — Query Time
+def get_sql(user_question):
+    query_embedding = model.encode([user_question], convert_to_numpy=True)
+    
+    distances, indices = index.search(query_embedding, k=1)
+    
+    best_match_idx = indices[0][0]
+    
+    return sql_queries[best_match_idx]
+
+
+That’s it.
+
+🧠 Why This Is Ideal For Your Case
+
+Because:
+
+You only have 200 distinct SQL queries
+
+Variations are semantic
+
+Dataset is relatively small (2000)
+
+Embedding similarity works extremely well here.
+
+🎯 Even Better Optimization (Important Insight)
+
+Instead of embedding all 2000 variations…
+
+You can:
+
+🔹 Cluster by SQL query
+
+Store:
+
+{
+   sql_1: [question_variation_1, question_variation_2, ...],
+   sql_2: [...]
+}
+
+
+Then:
+
+Option A (Simple)
+
+Embed all 2000 questions → fine.
+
+Option B (Smarter)
+
+Compute:
+
+Embedding centroid per SQL group
+
+Then store only 200 vectors instead of 2000.
+
+At query time:
+
+Compare against 200 centroids
+
+Return that SQL
+
+⚡ Faster
+⚡ Cleaner
+⚡ Less memory
+⚡ More robust
+
+📊 Recommended Similarity Threshold
+
+To avoid wrong SQL:
+
+if similarity_score < 0.75:
+    return "No confident match"
+
+
+You must test threshold on your dataset.
+
+🚀 Performance Expectations
+
+For 2000 questions:
+
+No FAISS needed (even brute force is fast)
+
+~5–20ms response time on CPU
+
+Very high accuracy (if variations are clean)
+
+🏆 BEST PRACTICAL STACK
+Component	Recommendation
+Embedding Model	all-MiniLM-L6-v2
+Storage	FAISS (optional)
+Language	Python
+Scale	Easily handles 100k+ questions
+⚠️ Important Production Advice
+
+Normalize text before embedding
+
+Remove sensitive tokens
+
+Monitor similarity score
+
+Log failed queries to improve dataset
+
+Consider fine-tuning later if needed
+
+💡 If You Want Even Higher Accuracy
+
+You can:
+
+Fine-tune SentenceTransformer on your 2000 pairs
+
+Or use a cross-encoder reranker (for top 5 results)
+
+But honestly — for 2000 samples, base model is usually enough.
