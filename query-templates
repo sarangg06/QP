@@ -1,0 +1,204 @@
+The key idea is:
+
+Never store fully concrete SQL.
+Store SQL templates with placeholders, then safely inject extracted parameters.
+
+✅ Step 1 — Store SQL As Templates (NOT Final Queries)
+
+Instead of:
+
+SELECT name FROM employees WHERE emp_id = 'TR12345';
+
+
+Store:
+
+SELECT name FROM employees WHERE emp_id = :emp_id;
+
+
+Or:
+
+SELECT * FROM employees 
+WHERE department = :department;
+
+
+Or:
+
+SELECT * FROM employees 
+WHERE retirement_date >= :start_date;
+
+🏗 Example Template Mapping
+sql_queries = [
+    "SELECT name FROM employees WHERE emp_id = :emp_id;",
+    "SELECT AVG(hours) FROM employees WHERE department = :department;",
+    "SELECT * FROM employees WHERE retirement_date >= :date;",
+    "SELECT * FROM employees WHERE name = :emp_name;"
+]
+
+
+Now retrieval returns the correct template.
+
+✅ Step 2 — Extract Parameters From Original Question
+
+You already normalized for matching.
+
+But now you must extract real values from the original input.
+
+🔹 Example Extraction Function
+import re
+from datetime import datetime
+
+def extract_parameters(user_question):
+    params = {}
+
+    # Employee ID
+    emp_id_match = re.search(r'\bTR\d+\b', user_question, re.IGNORECASE)
+    if emp_id_match:
+        params["emp_id"] = emp_id_match.group()
+
+    # Numbers
+    number_match = re.search(r'\b\d+\b', user_question)
+    if number_match:
+        params["number"] = number_match.group()
+
+    # Dates (very simple example)
+    date_match = re.search(r'\b\d{4}-\d{2}-\d{2}\b', user_question)
+    if date_match:
+        params["date"] = date_match.group()
+
+    return params
+
+✅ Step 3 — Handle GETDATE Replacement
+
+If original SQL had:
+
+WHERE retirement_date >= GETDATE()
+
+
+You should NOT dynamically string-replace GETDATE().
+
+Instead, template it:
+
+WHERE retirement_date >= :date
+
+
+Then if user says:
+
+Show retirees after 2022-01-01
+
+You inject:
+
+params["date"] = "2022-01-01"
+
+✅ Step 4 — Safely Inject Parameters (CRITICAL)
+
+🚨 NEVER DO THIS:
+
+query = template.replace(":emp_name", user_value)
+
+
+This causes SQL injection vulnerability.
+
+🔐 Correct Way — Use Parameterized Queries
+
+If using pyodbc / psycopg2 / sqlite3:
+
+Example with SQLite
+import sqlite3
+
+conn = sqlite3.connect("database.db")
+cursor = conn.cursor()
+
+template = "SELECT * FROM employees WHERE name = ?;"
+cursor.execute(template, (params["emp_name"],))
+
+Example with Named Parameters
+template = """
+SELECT * FROM employees 
+WHERE department = :department
+"""
+
+cursor.execute(template, {"department": params["department"]})
+
+🏆 Final Clean Pipeline
+User Input
+↓
+Normalize (for matching only)
+↓
+Retrieve SQL Template
+↓
+Extract parameters from ORIGINAL question
+↓
+Execute template using parameter binding
+↓
+Return results
+
+🔥 Full Integrated Example
+def process_question(user_question):
+
+    # Step 1: Retrieve SQL template
+    sql_template = get_sql(user_question)
+
+    # Step 2: Extract real parameters
+    params = extract_parameters(user_question)
+
+    # Step 3: Execute safely
+    cursor.execute(sql_template, params)
+
+    return cursor.fetchall()
+
+🧠 Handling Multi-Word Names & Departments
+
+Since you already have:
+
+EMPLOYEE_NAMES = ["sarang deshpande", "pqrs"]
+DEPARTMENTS = ["abcd", "corporate finance"]
+
+
+You can extract them similarly:
+
+def extract_entities(user_question):
+    params = {}
+    lower_q = user_question.lower()
+
+    for name in EMPLOYEE_NAMES:
+        if name in lower_q:
+            params["emp_name"] = name
+
+    for dept in DEPARTMENTS:
+        if dept in lower_q:
+            params["department"] = dept
+
+    return params
+
+⚠️ VERY IMPORTANT DESIGN RULE
+
+Matching = use normalized
+Execution = use original extracted values
+
+Never mix them.
+
+🚀 Advanced (Production) Upgrade
+
+Instead of regex-based extraction, you could:
+
+Use spaCy NER
+
+Or train a small entity extraction model
+
+Or use LLM function-calling
+
+But for internal enterprise systems with known entity lists, dictionary-based extraction is often best.
+
+🎯 Final Architecture Summary
+
+You now have:
+
+Semantic search layer (retrieval)
+
+Template-based SQL
+
+Parameter extraction layer
+
+Safe execution layer
+
+That is exactly how serious NL-to-SQL systems are built.
