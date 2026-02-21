@@ -319,22 +319,14 @@ def returnFile():
             )
         
         else:
-            print(f"[SERVER] File not found: {e}")
-            logging(f"[SERVER] File not found: {e}")
-            return FileResponse(
-                path = "E:/Ravi/Dev/WebDev/nodejs_projects/MyExpSites/BACS-Query-Processor/fastapi-processor/results/Result_20260212_101301.xlsx",
-                filename = "results_file.csv",
-                media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
+            print(f"[SERVER] File not found:")
+            logging.info(f"[SERVER] File not found:")
+            raise HTTPException(status_code=404, detail="File not found")
     
     except Exception as e:
         print(f"[SERVER] Error during FileResponse: {e}")
-        logging(f"[SERVER] Error during FileResponse: {e}")
-        return FileResponse(
-            path = "E:/Ravi/Dev/WebDev/nodejs_projects/MyExpSites/BACS-Query-Processor/fastapi-processor/results/Result_20260212_101301.xlsx",
-            filename = "results_file.csv",
-            media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
+        logging.info(f"[SERVER] Error during FileResponse: {e}")
+        raise HTTPException(status_code=500)
 
 
 @app.post("/stop")
