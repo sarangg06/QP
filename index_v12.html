@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Text to SQL</title>
+  <style>
+    body { font-family: Segoe UI, Arial, sans-serif; margin: 24px; max-width: 900px; }
+    .row { display: flex; gap: 8px; align-items: center; }
+    input { flex: 1; padding: 8px; }
+    button { padding: 8px 12px; cursor: pointer; }
+    .card { margin-top: 16px; padding: 12px; border: 1px solid #d0d7de; border-radius: 8px; }
+    .label { font-weight: 600; }
+    pre { white-space: pre-wrap; word-break: break-word; min-height: 180px; margin: 0; }
+  </style>
+</head>
+<body>
+  <h2>Query Runner</h2>
+  <div class="row">
+    <input id="q" placeholder="Type your prompt" />
+    <button id="askBtn" onclick="send()">Ask</button>
+  </div>
+
+  <div class="card">
+    <div><span class="label">Queue Status:</span> <span id="queueStatus">idle</span></div>
+    <div><span class="label">Queue Position:</span> <span id="queuePos">-</span></div>
+    <div><span class="label">Request ID:</span> <span id="requestId">-</span></div>
+  </div>
+
+  <div class="card">
+    <div class="label">Processor Chunks</div>
+    <pre id="out"></pre>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
+  <script>
+    let activeSource = null;
+    let accessToken = null;
+
+    function setQueue(kv) {
+      if (kv.request_id !== undefined) document.getElementById("requestId").innerText = kv.request_id;
+      if (kv.position !== undefined) document.getElementById("queuePos").innerText = kv.position;
+      if (kv.status !== undefined) document.getElementById("queueStatus").innerText = kv.status;
+    }
+
+    function appendChunk(raw) {
+      const out = document.getElementById("out");
+      const safe = DOMPurify.sanitize(raw, { ALLOWED_TAGS: [], ALLOWED_ATTR: [] });
+      if (safe) out.textContent += safe + "\n";
+    }
+
+    async function send() {
+      const q = document.getElementById("q").value.trim();
+      if (!q) return;
+
+      document.getElementById("out").innerText = "";
+      document.getElementById("queueStatus").innerText = "connecting";
+      document.getElementById("queuePos").innerText = "-";
+      document.getElementById("requestId").innerText = "-";
+
+      const askBtn = document.getElementById("askBtn");
+      askBtn.disabled = true;
+
+      if (activeSource) {
+        activeSource.close();
+        activeSource = null;
+      }
+
+      try {
+        if (!accessToken) {
+          appendChunk("Error: Please login first.");
+          document.getElementById("queueStatus").innerText = "unauthorized";
+          askBtn.disabled = false;
+          return;
+        }
+
+        const source = new EventSource(`/query?prompt=${encodeURIComponent(q)}&token=${encodeURIComponent(accessToken)}`);
+        activeSource = source;
+
+        source.addEventListener("queue", (evt) => {
+          try {
+            setQueue(JSON.parse(evt.data));
+          } catch (_) {
+            setQueue({ status: "queued" });
+          }
+        });
+
+        source.addEventListener("chunk", (evt) => {
+          try {
+            const data = JSON.parse(evt.data);
+            appendChunk(data.text || "");
+          } catch (_) {
+            appendChunk(evt.data || "");
+          }
+        });
+
+        source.addEventListener("server_error", (evt) => {
+          let msg = "stream error";
+          try {
+            const data = JSON.parse(evt.data);
+            msg = data.message || msg;
+          } catch (_) {}
+          appendChunk(`Error: ${msg}`);
+          document.getElementById("queueStatus").innerText = "error";
+          askBtn.disabled = false;
+          source.close();
+          if (activeSource === source) activeSource = null;
+        });
+
+        source.addEventListener("end", () => {
+          if (document.getElementById("queueStatus").innerText !== "error") {
+            document.getElementById("queueStatus").innerText = "completed";
+          }
+          askBtn.disabled = false;
+          source.close();
+          if (activeSource === source) activeSource = null;
+        });
+
+        source.onerror = () => {
+          if (activeSource !== source) return;
+          if (document.getElementById("queueStatus").innerText !== "completed") {
+            document.getElementById("queueStatus").innerText = "disconnected";
+          }
+          askBtn.disabled = false;
+          source.close();
+          activeSource = null;
+        };
+      } catch (err) {
+        appendChunk(`Error: ${err.message}`);
+        document.getElementById("queueStatus").innerText = "error";
+      }
+    }
+  </script>
+
+  <script>
+
+    (function injectLoginSectionAboveQueryUI() {
+      const wrapper = document.createElement("div");
+      wrapper.id = "login-section";
+      wrapper.innerHTML = `
+        <h2>Login</h2>
+        <input type="text" id="username" placeholder="Username" />
+        <input type="password" id="password" placeholder="Password" />
+        <button onclick="login()">Login</button>
+        <p id="login-status"></p>
+      `;
+
+      const queryHeading = document.querySelector("body > h2");
+      if (queryHeading) {
+        queryHeading.parentNode.insertBefore(wrapper, queryHeading);
+      } else {
+        document.body.prepend(wrapper);
+      }
+    })();
+
+    async function login() {
+      const username = document.getElementById("username").value;
+      const password = document.getElementById("password").value;
+      const response = await fetch("/login-local", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: username, password: password })
+      });
+      const data = await response.json();
+      if (response.ok) {
+        accessToken = data.access_token;
+        document.getElementById("login-status").innerText = "Logged in!";
+      } else {
+        document.getElementById("login-status").innerText = "Login failed.";
+      }
+    }
+  </script>
+</body>
+</html>
+
