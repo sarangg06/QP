@@ -1,3 +1,6 @@
+# this server module sends queue positions to users and updates them in real-time.
+# use this module to link with other modules and use the accompanied index_v11.py file (index file on system to be updated with the merged changes)
+
 import asyncio
 import threading
 import logging
@@ -150,12 +153,11 @@ async def llm_worker():
 
             saw_eor = False
             chunks_iter = iter(chunks)
+            _end_of_chunks = object()
             while True:
-                try:
-                    # Pull the next chunk off the synchronous generator in a worker thread
-                    # so blocking model work does not stall the asyncio event loop.
-                    chunk = await asyncio.to_thread(next, chunks_iter)
-                except StopIteration:
+                # Use a sentinel so StopIteration is not raised through asyncio Future.
+                chunk = await asyncio.to_thread(next, chunks_iter, _end_of_chunks)
+                if chunk is _end_of_chunks:
                     break
 
                 if chunk is None:
@@ -358,9 +360,10 @@ app.add_middleware(
 if __name__ == "__main__":
 
     uvicorn.run(
-        "server_v8:app",
+        "server_v11:app",
         host="127.0.0.1",
         port=8000,
         reload=True,
         log_level="info"
     )
+
