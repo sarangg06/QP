@@ -1,9 +1,4 @@
 This is a readme file for the BACS Query Processor project (BACSQP).
-Latest versions: 
-`server-fastapi-v4.py 
- processor_v3.py 
- models_v1.py`
-`utils_v1.py`
 
 This readme should serve the reader as a complete technical guide for using the BACSQP, including code information, setup, and usage.
 
