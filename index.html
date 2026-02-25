@@ -1,0 +1,614 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ISRO Text-to-SQL Console</title>
+  <style>
+    :root {
+      --bg: #070b0d;
+      --panel: #0d1519;
+      --panel-2: #101d23;
+      --line: #1d3138;
+      --text: #d7f7df;
+      --muted: #8db3a2;
+      --accent: #45f19d;
+      --warn: #ffd166;
+      --error: #ff6b6b;
+      --ok: #66ffa6;
+      --mono: "Consolas", "Cascadia Mono", "Courier New", monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      background:
+        radial-gradient(1000px 420px at 80% -20%, #12303f 0%, transparent 60%),
+        radial-gradient(900px 520px at -10% 0%, #14241c 0%, transparent 50%),
+        var(--bg);
+      font-family: var(--mono);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .page {
+      width: min(1150px, 94vw);
+      margin: 24px auto;
+      display: grid;
+      gap: 14px;
+    }
+
+    .header {
+      border: 1px solid var(--line);
+      background: linear-gradient(180deg, #0e171c, #0a1115);
+      border-radius: 10px;
+      padding: 14px 16px;
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
+    }
+
+    .sys-name {
+      margin: 0;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      font-size: 17px;
+      color: var(--ok);
+      text-shadow: 0 0 10px rgba(102, 255, 166, 0.22);
+    }
+
+    .sys-sub {
+      margin: 6px 0 0;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .login {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 10px;
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+      grid-template-columns: 120px 1fr 1fr auto;
+      align-items: center;
+    }
+
+    .login-label { color: var(--muted); font-size: 12px; }
+
+    input, button {
+      font-family: var(--mono);
+      border-radius: 7px;
+      border: 1px solid var(--line);
+      background: #0c171c;
+      color: var(--text);
+      padding: 10px 12px;
+      outline: none;
+    }
+
+    input:focus {
+      border-color: #2f5f4c;
+      box-shadow: 0 0 0 2px rgba(69, 241, 157, 0.12);
+    }
+
+    button {
+      background: linear-gradient(180deg, #113322, #0d2b1c);
+      border-color: #23563d;
+      color: #b6ffd2;
+      cursor: pointer;
+      transition: transform 120ms ease, filter 120ms ease;
+    }
+
+    button:hover:enabled { filter: brightness(1.08); transform: translateY(-1px); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+    .login-status { font-size: 12px; color: var(--muted); min-height: 1em; }
+
+    .terminal {
+      border: 1px solid var(--line);
+      background: #0a1115;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 14px 36px rgba(0, 0, 0, 0.45);
+    }
+
+    .titlebar {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      padding: 10px 12px;
+      background: linear-gradient(180deg, #101b21, #0d1519);
+      border-bottom: 1px solid var(--line);
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .leftbar, .rightbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      display: inline-block;
+      box-shadow: 0 0 10px currentColor;
+    }
+
+    .dot-connected { color: var(--ok); }
+    .dot-processing { color: var(--warn); }
+    .dot-completed { color: #8ecae6; }
+    .dot-error, .dot-disconnected { color: var(--error); }
+
+    .shell {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      min-height: 520px;
+    }
+
+    .main-pane {
+      padding: 12px;
+      border-right: 1px solid var(--line);
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      gap: 12px;
+    }
+
+    .command-row {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .prompt { color: var(--ok); font-size: 13px; }
+
+    .result-wrap {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      overflow: hidden;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      min-height: 0;
+    }
+
+    .result-head {
+      border-bottom: 1px solid var(--line);
+      padding: 8px 10px;
+      font-size: 12px;
+      color: var(--muted);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    pre {
+      margin: 0;
+      padding: 10px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow: auto;
+      color: #d7f7df;
+      font-size: 13px;
+      line-height: 1.45;
+      min-height: 0;
+    }
+
+    .side-pane {
+      padding: 12px;
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      gap: 12px;
+      min-height: 0;
+    }
+
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      padding: 10px;
+      font-size: 12px;
+    }
+
+    .kv { display: grid; grid-template-columns: 90px 1fr; gap: 6px; }
+    .k { color: var(--muted); }
+
+    .queue-log {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      padding: 8px;
+      overflow: auto;
+      font-size: 12px;
+      line-height: 1.4;
+      color: #b2d0c1;
+    }
+
+    .footer {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #0c1519;
+      padding: 10px 12px;
+      font-size: 12px;
+      color: var(--muted);
+      display: flex;
+      gap: 18px;
+      flex-wrap: wrap;
+      justify-content: space-between;
+    }
+
+    @media (max-width: 920px) {
+      .login { grid-template-columns: 1fr; }
+      .shell { grid-template-columns: 1fr; }
+      .main-pane { border-right: none; border-bottom: 1px solid var(--line); }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="header">
+      <h1 class="sys-name">ISRO Text-to-SQL Execution Terminal</h1>
+      <p class="sys-sub">Queue-aware streaming console for natural language query processing.</p>
+    </header>
+
+    <section class="login" id="login-section">
+      <div class="login-label">AUTH LOGIN</div>
+      <input type="text" id="username" placeholder="username" autocomplete="username" />
+      <input type="password" id="password" placeholder="password" autocomplete="current-password" />
+      <button id="loginBtn" onclick="login()">Login</button>
+      <div class="login-status" id="login-status">Not logged in.</div>
+    </section>
+
+    <section class="terminal">
+      <div class="titlebar">
+        <div class="leftbar">
+          <span class="status-dot dot-disconnected" id="statusDot"></span>
+          <span id="sysStatus">disconnected</span>
+          <span>|</span>
+          <span id="connInfo">awaiting login</span>
+        </div>
+        <div class="rightbar">
+          <span>queue status: <strong id="queueStatus">idle</strong></span>
+          <span>position: <strong id="queuePos">-</strong></span>
+          <span>request id: <strong id="requestId">-</strong></span>
+        </div>
+      </div>
+
+      <div class="shell">
+        <div class="main-pane">
+          <div class="command-row">
+            <span class="prompt">isro@text2sql:&gt;</span>
+            <input id="q" placeholder="enter natural language query" />
+            <button id="askBtn" onclick="send()">Run</button>
+          </div>
+
+          <div class="command-row">
+            <span class="prompt">result://</span>
+            <span id="runMeta" class="login-status">idle</span>
+            <button id="downloadBtn" onclick="downloadResults()" disabled>Download Results</button>
+          </div>
+
+          <div class="result-wrap">
+            <div class="result-head">
+              <span>stream output</span>
+              <span id="lineCount">0 lines</span>
+            </div>
+            <pre id="out"></pre>
+          </div>
+        </div>
+
+        <aside class="side-pane">
+          <div class="card">
+            <div class="kv"><span class="k">user</span><span id="whoami">-</span></div>
+            <div class="kv"><span class="k">role</span><span id="role">-</span></div>
+            <div class="kv"><span class="k">last login</span><span id="lastLogin">-</span></div>
+          </div>
+
+          <div class="card">
+            <div class="kv"><span class="k">last run</span><span id="lastRun">-</span></div>
+            <div class="kv"><span class="k">completed</span><span id="sessionDone">0</span></div>
+            <div class="kv"><span class="k">errors</span><span id="sessionErr">0</span></div>
+          </div>
+
+          <div class="queue-log" id="queueLog"></div>
+        </aside>
+      </div>
+    </section>
+
+    <footer class="footer">
+      <span>queries ever processed: <strong id="totalQueries">0</strong></span>
+      <span>session uptime: <strong id="uptime">00:00:00</strong></span>
+      <span>service endpoint: <strong>/query</strong> | download: <strong>/download</strong></span>
+    </footer>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
+  <script>
+    let activeSource = null;
+    let accessToken = null;
+    let currentUser = null;
+    let currentRole = null;
+    let sessionCompleted = 0;
+    let sessionErrors = 0;
+
+    const startedAt = Date.now();
+    const totalKey = "t2sql_total_queries_ever";
+
+    function getTotalQueries() {
+      const val = parseInt(localStorage.getItem(totalKey) || "0", 10);
+      return Number.isFinite(val) ? val : 0;
+    }
+
+    function setTotalQueries(v) {
+      localStorage.setItem(totalKey, String(v));
+      document.getElementById("totalQueries").innerText = String(v);
+    }
+
+    function tickUptime() {
+      const sec = Math.floor((Date.now() - startedAt) / 1000);
+      const h = String(Math.floor(sec / 3600)).padStart(2, "0");
+      const m = String(Math.floor((sec % 3600) / 60)).padStart(2, "0");
+      const s = String(sec % 60).padStart(2, "0");
+      document.getElementById("uptime").innerText = `${h}:${m}:${s}`;
+    }
+
+    function setSystemStatus(status, info) {
+      const statusEl = document.getElementById("sysStatus");
+      const dot = document.getElementById("statusDot");
+      const infoEl = document.getElementById("connInfo");
+      statusEl.innerText = status;
+      infoEl.innerText = info || "";
+
+      dot.className = "status-dot";
+      if (status === "connected") dot.classList.add("dot-connected");
+      else if (status === "processing") dot.classList.add("dot-processing");
+      else if (status === "completed") dot.classList.add("dot-completed");
+      else if (status === "error") dot.classList.add("dot-error");
+      else dot.classList.add("dot-disconnected");
+    }
+
+    function setQueue(kv) {
+      if (kv.request_id !== undefined) document.getElementById("requestId").innerText = kv.request_id;
+      if (kv.position !== undefined) document.getElementById("queuePos").innerText = kv.position;
+      if (kv.status !== undefined) document.getElementById("queueStatus").innerText = kv.status;
+
+      const time = new Date().toLocaleTimeString();
+      const msg = `[${time}] ${JSON.stringify(kv)}`;
+      const qlog = document.getElementById("queueLog");
+      qlog.textContent += (qlog.textContent ? "\n" : "") + msg;
+      qlog.scrollTop = qlog.scrollHeight;
+    }
+
+    function appendChunk(raw) {
+      const out = document.getElementById("out");
+      const safe = DOMPurify.sanitize(raw, { ALLOWED_TAGS: [], ALLOWED_ATTR: [] });
+      if (safe) out.textContent += safe + "\n";
+      const lines = out.textContent ? out.textContent.split("\n").filter(Boolean).length : 0;
+      document.getElementById("lineCount").innerText = `${lines} lines`;
+      out.scrollTop = out.scrollHeight;
+    }
+
+    function markSessionComplete() {
+      sessionCompleted += 1;
+      document.getElementById("sessionDone").innerText = String(sessionCompleted);
+      setTotalQueries(getTotalQueries() + 1);
+    }
+
+    function markSessionError() {
+      sessionErrors += 1;
+      document.getElementById("sessionErr").innerText = String(sessionErrors);
+    }
+
+    function parseJwtPayload(token) {
+      try {
+        const base64Url = token.split(".")[1];
+        if (!base64Url) return null;
+        const base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
+        const json = decodeURIComponent(atob(base64).split("").map((c) => "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2)).join(""));
+        return JSON.parse(json);
+      } catch (_) {
+        return null;
+      }
+    }
+
+    async function login() {
+      const username = document.getElementById("username").value.trim();
+      const password = document.getElementById("password").value;
+      const statusEl = document.getElementById("login-status");
+      const btn = document.getElementById("loginBtn");
+
+      if (!username || !password) {
+        statusEl.innerText = "Username and password required.";
+        return;
+      }
+
+      btn.disabled = true;
+      statusEl.innerText = "Authenticating...";
+
+      try {
+        const response = await fetch("/login-local", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username, password })
+        });
+
+        const data = await response.json().catch(() => ({}));
+        if (response.ok && data.access_token) {
+          accessToken = data.access_token;
+          const payload = parseJwtPayload(accessToken) || {};
+          currentUser = payload.sub || username;
+          currentRole = payload.role || "user";
+
+          document.getElementById("whoami").innerText = currentUser;
+          document.getElementById("role").innerText = currentRole;
+          document.getElementById("lastLogin").innerText = new Date().toLocaleString();
+          statusEl.innerText = "Logged in.";
+          setSystemStatus("connected", `authenticated as ${currentUser}`);
+        } else {
+          accessToken = null;
+          statusEl.innerText = (data && data.detail) ? `Login failed: ${data.detail}` : "Login failed.";
+          setSystemStatus("disconnected", "authentication failed");
+        }
+      } catch (err) {
+        accessToken = null;
+        statusEl.innerText = `Login error: ${err.message}`;
+        setSystemStatus("disconnected", "authentication error");
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    async function send() {
+      const q = document.getElementById("q").value.trim();
+      if (!q) return;
+
+      if (!accessToken) {
+        appendChunk("Error: Please login first.");
+        setSystemStatus("disconnected", "login required");
+        return;
+      }
+
+      document.getElementById("out").innerText = "";
+      document.getElementById("lineCount").innerText = "0 lines";
+      document.getElementById("queueStatus").innerText = "connecting";
+      document.getElementById("queuePos").innerText = "-";
+      document.getElementById("requestId").innerText = "-";
+      document.getElementById("runMeta").innerText = `query started at ${new Date().toLocaleTimeString()}`;
+      document.getElementById("lastRun").innerText = new Date().toLocaleString();
+      document.getElementById("downloadBtn").disabled = true;
+
+      const askBtn = document.getElementById("askBtn");
+      askBtn.disabled = true;
+
+      if (activeSource) {
+        activeSource.close();
+        activeSource = null;
+      }
+
+      setSystemStatus("processing", "stream opening");
+
+      try {
+        const source = new EventSource(`/query?prompt=${encodeURIComponent(q)}&token=${encodeURIComponent(accessToken)}`);
+        activeSource = source;
+
+        source.addEventListener("queue", (evt) => {
+          try {
+            const data = JSON.parse(evt.data);
+            setQueue(data);
+            if (data.status === "processing") setSystemStatus("processing", "request in worker");
+          } catch (_) {
+            setQueue({ status: "queued" });
+          }
+        });
+
+        source.addEventListener("chunk", (evt) => {
+          try {
+            const data = JSON.parse(evt.data);
+            appendChunk(data.text || "");
+          } catch (_) {
+            appendChunk(evt.data || "");
+          }
+        });
+
+        source.addEventListener("server_error", (evt) => {
+          let msg = "stream error";
+          try {
+            const data = JSON.parse(evt.data);
+            msg = data.message || msg;
+          } catch (_) {}
+          appendChunk(`Error: ${msg}`);
+          markSessionError();
+          document.getElementById("queueStatus").innerText = "error";
+          document.getElementById("runMeta").innerText = "server_error";
+          setSystemStatus("error", msg);
+          askBtn.disabled = false;
+          source.close();
+          if (activeSource === source) activeSource = null;
+        });
+
+        source.addEventListener("end", () => {
+          document.getElementById("queueStatus").innerText = "completed";
+          document.getElementById("runMeta").innerText = `completed at ${new Date().toLocaleTimeString()}`;
+          document.getElementById("downloadBtn").disabled = false;
+          markSessionComplete();
+          setSystemStatus("completed", "stream complete");
+
+          askBtn.disabled = false;
+          source.close();
+          if (activeSource === source) activeSource = null;
+
+          setTimeout(() => {
+            if (!activeSource && accessToken) {
+              setSystemStatus("connected", `authenticated as ${currentUser || "user"}`);
+            }
+          }, 3000);
+        });
+
+        source.onerror = () => {
+          if (activeSource !== source) return;
+          if (document.getElementById("queueStatus").innerText !== "completed") {
+            document.getElementById("queueStatus").innerText = "disconnected";
+            setSystemStatus("disconnected", "stream lost");
+            markSessionError();
+          }
+          askBtn.disabled = false;
+          source.close();
+          activeSource = null;
+        };
+      } catch (err) {
+        appendChunk(`Error: ${err.message}`);
+        markSessionError();
+        document.getElementById("queueStatus").innerText = "error";
+        setSystemStatus("error", "failed to start stream");
+        askBtn.disabled = false;
+      }
+    }
+
+    async function downloadResults() {
+      const btn = document.getElementById("downloadBtn");
+      btn.disabled = true;
+      try {
+        const res = await fetch("/download", { method: "GET" });
+        if (!res.ok) {
+          appendChunk(`Download unavailable (${res.status}).`);
+          setTimeout(() => { btn.disabled = false; }, 800);
+          return;
+        }
+
+        const blob = await res.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "results.xlsx";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+        appendChunk("Download complete: results.xlsx");
+      } catch (err) {
+        appendChunk(`Download error: ${err.message}`);
+      } finally {
+        setTimeout(() => { btn.disabled = false; }, 1000);
+      }
+    }
+
+    document.getElementById("q").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") send();
+    });
+
+    document.getElementById("password").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") login();
+    });
+
+    setTotalQueries(getTotalQueries());
+    setSystemStatus("disconnected", "awaiting login");
+    tickUptime();
+    setInterval(tickUptime, 1000);
+  </script>
+</body>
+</html>

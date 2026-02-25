@@ -20,9 +20,15 @@ from contextlib import asynccontextmanager
 from fastapi.staticfiles import StaticFiles
 
 from models_v1 import load_sql_model, load_response_model
-from processor_v6 import process_query
+from processor_v6 import process_query, get_latest_result_filepath
 from utils_v2 import check_gpu
-from crcfix import filepath
+
+import jwt
+import bcrypt
+from datetime import datetime, timedelta
+from fastapi import HTTPException
+from fastapi.security import OAuth2PasswordBearer
+from fastapi import Depends
 
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 logging.basicConfig(filename = f'logs/app_{timestamp}.log', level=logging.DEBUG, filemode = 'a', format="%(asctime)s - %(levelname)s - %(message)s")
@@ -195,11 +201,101 @@ async def llm_worker():
             logging.info(f"[SERVER] Worker completed work for request_id={request_id}")
             llm_queue.task_done()
 
+
+SECRET_KEY = "local-dev-secret-key"
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60
+
+
+def _generate_password_hashes():
+    users_hashed = {
+        "admin": b"$2b$12$eOV4Wwo3EJStj8JRT2C0o.PwiZmexdykZKZDIY55UrywV6Mwv3JCy",
+        "analyst": b"$2b$12$xVvCSoVIIVqrgetRrHmQWOxqquo0scFGDDc1HywLqocn7wdCvF.3W",
+        "user": b"$2b$12$dNBJJvoK/2pRgedgC6wtSe5XWPoLJFMEnGx/Et5znOnC.oKvmkS.y"
+    }
+
+    return users_hashed
+
+
+FAKE_USERS = _generate_password_hashes()
+
+USER_ROLES = {
+    "admin": "admin",
+    "analyst": "analyst",
+    "user": "user"
+}
+
+
+def authenticate_user(username: str, password: str):
+    if username not in FAKE_USERS:
+        return None
+
+    hashed = FAKE_USERS[username]
+
+    if not bcrypt.checkpw(password.encode(), hashed):
+        return None
+
+    return {
+        "username": username,
+        "role": USER_ROLES.get(username, "user")
+    }
+
+
+def create_access_token(username: str, role: str):
+    exp_ts = int(datetime.now().timestamp()) + (ACCESS_TOKEN_EXPIRE_MINUTES * 60)
+
+    payload = {
+        "sub": username,
+        "role": role,
+        "exp": exp_ts
+    }
+
+    if hasattr(jwt, "encode"):
+        token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+        return token
+
+    jwt_instance = jwt.JWT()
+    jwk_key = jwt.jwk.OctetJWK(SECRET_KEY.encode())
+    token = jwt_instance.encode(payload, jwk_key, alg=ALGORITHM)
+    return token
+
+
+def decode_access_token(token: str):
+    try:
+        if hasattr(jwt, "decode") and hasattr(jwt, "ExpiredSignatureError"):
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        else:
+            jwt_instance = jwt.JWT()
+            jwk_key = jwt.jwk.OctetJWK(SECRET_KEY.encode())
+            payload = jwt_instance.decode(token, jwk_key, algorithms={ALGORITHM})
+
+        return {
+            "username": payload.get("sub"),
+            "role": payload.get("role")
+        }
+    except Exception as e:
+        err_name = e.__class__.__name__
+        err_text = str(e)
+        if err_name == "ExpiredSignatureError" or "expired" in err_text.lower():
+            raise HTTPException(status_code=401, detail="Token expired")
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+
+
+def get_current_user_optional(token: str = Depends(oauth2_scheme)):
+    return decode_access_token(token)
 # ENDPOINTS
 
 @app.get("/query")
-async def generate(req: QueryRequest = Depends()):
+async def generate(req: QueryRequest = Depends(), token: str = ""):
     client_q = asyncio.Queue()
+
+    if not token:
+        raise HTTPException(status_code=401, detail="Login required")
+
+    _current_user = decode_access_token(token)
 
     prompt = req.prompt.strip()
 
@@ -306,18 +402,19 @@ async def queue_position(request_id: int):
 @app.get("/download")
 def returnFile():
     try:
+        filepath = get_latest_result_filepath()
         if filepath and os.path.exists(filepath):
             print(f"[SERVER] Returning FileResponse on {filepath}")
             logging.info(f"[SERVER] Returning FileResponse on {filepath}")
 
             headers = {
-                'Content-Disposition': 'attachment; filename="results.xlsx"'
+                f'Content-Disposition': f'attachment; filename="{os.path.basename(filepath)}"'
             }
 
             return FileResponse(
                 path = filepath,
                 headers=headers,
-                media_type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                media_type = 'application/octet-stream'
             )
         
         else:
@@ -346,8 +443,6 @@ def resume():
     logging.info("[SERVER] Resume signal received")
     return {"status": "running"}
 
-app.mount("/", StaticFiles(directory = "static", html = True), name = "static")
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -357,6 +452,27 @@ app.add_middleware(
 )
 
 
+
+from pydantic import BaseModel
+
+
+class LocalLoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+@app.post("/login-local")
+def login_local(data: LocalLoginRequest):
+    user = authenticate_user(data.username, data.password)
+
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    token = create_access_token(user["username"], user["role"])
+
+    return {"access_token": token}
+
+app.mount("/", StaticFiles(directory = "static", html = True), name = "static")
 if __name__ == "__main__":
 
     uvicorn.run(
@@ -366,4 +482,3 @@ if __name__ == "__main__":
         reload=True,
         log_level="info"
     )
-
