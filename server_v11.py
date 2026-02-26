@@ -19,22 +19,22 @@ from pydantic import BaseModel, Field
 from contextlib import asynccontextmanager
 from fastapi.staticfiles import StaticFiles
 
-from models_v1 import load_sql_model, load_response_model
+from models_v1 import load_sql_model
 from processor_v6 import process_query, get_latest_result_filepath
 from utils_v2 import check_gpu
-
-import jwt
-import bcrypt
-from datetime import datetime, timedelta
-from fastapi import HTTPException
-from fastapi.security import OAuth2PasswordBearer
-from fastapi import Depends
+from auth_v1 import (
+    authenticate_user,
+    create_access_token,
+    get_current_user,
+    register_user,
+    ensure_auth_tables,
+)
 
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+os.makedirs("logs", exist_ok=True)
 logging.basicConfig(filename = f'logs/app_{timestamp}.log', level=logging.DEBUG, filemode = 'a', format="%(asctime)s - %(levelname)s - %(message)s")
 
 sql_model = None
-response_model = None
 stop_event = threading.Event()
 
 class QueryRequest(BaseModel):
@@ -91,14 +91,17 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(llm_worker())
     logging.info("[SERVER] Worker created")
 
-    global sql_model, response_model
+    global sql_model
     logging.info("[SERVER] Starting server...")
     print("\n[SERVER] Server started")
     check_gpu()
+    try:
+        ensure_auth_tables()
+    except Exception as e:
+        logging.error(f"[SERVER] Auth table initialization failed: {e}")
 
     print("\n[SERVER] Loading models")
     sql_model = load_sql_model()
-    response_model = load_response_model()
     print("\n[SERVER] Models loaded and ready")
     logging.info("[SERVER] Models loaded and ready")
 
@@ -108,8 +111,6 @@ async def lifespan(app: FastAPI):
     logging.info("[SERVER] Shutting down...")
     if sql_model:
         sql_model.close()
-    if response_model:
-        response_model.close()
 
 app = FastAPI(lifespan=lifespan)
 
@@ -146,9 +147,9 @@ async def llm_worker():
 
             # Reset model state only when worker is about to process this request.
             # sql_model.reset()
-            # response_model.reset()
 
-            result = process_query(prompt, None, None, response_model, sql_model)
+            user_context = request_state.get("user_context") or {}
+            result = process_query(prompt, None, None, sql_model, user_context=user_context)
             chunks: Iterable
 
             # process_query may return a single string or an iterable of chunks.
@@ -202,100 +203,11 @@ async def llm_worker():
             llm_queue.task_done()
 
 
-SECRET_KEY = "local-dev-secret-key"
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
-
-
-def _generate_password_hashes():
-    users_hashed = {
-        "admin": b"$2b$12$eOV4Wwo3EJStj8JRT2C0o.PwiZmexdykZKZDIY55UrywV6Mwv3JCy",
-        "analyst": b"$2b$12$xVvCSoVIIVqrgetRrHmQWOxqquo0scFGDDc1HywLqocn7wdCvF.3W",
-        "user": b"$2b$12$dNBJJvoK/2pRgedgC6wtSe5XWPoLJFMEnGx/Et5znOnC.oKvmkS.y"
-    }
-
-    return users_hashed
-
-
-FAKE_USERS = _generate_password_hashes()
-
-USER_ROLES = {
-    "admin": "admin",
-    "analyst": "analyst",
-    "user": "user"
-}
-
-
-def authenticate_user(username: str, password: str):
-    if username not in FAKE_USERS:
-        return None
-
-    hashed = FAKE_USERS[username]
-
-    if not bcrypt.checkpw(password.encode(), hashed):
-        return None
-
-    return {
-        "username": username,
-        "role": USER_ROLES.get(username, "user")
-    }
-
-
-def create_access_token(username: str, role: str):
-    exp_ts = int(datetime.now().timestamp()) + (ACCESS_TOKEN_EXPIRE_MINUTES * 60)
-
-    payload = {
-        "sub": username,
-        "role": role,
-        "exp": exp_ts
-    }
-
-    if hasattr(jwt, "encode"):
-        token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
-        return token
-
-    jwt_instance = jwt.JWT()
-    jwk_key = jwt.jwk.OctetJWK(SECRET_KEY.encode())
-    token = jwt_instance.encode(payload, jwk_key, alg=ALGORITHM)
-    return token
-
-
-def decode_access_token(token: str):
-    try:
-        if hasattr(jwt, "decode") and hasattr(jwt, "ExpiredSignatureError"):
-            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        else:
-            jwt_instance = jwt.JWT()
-            jwk_key = jwt.jwk.OctetJWK(SECRET_KEY.encode())
-            payload = jwt_instance.decode(token, jwk_key, algorithms={ALGORITHM})
-
-        return {
-            "username": payload.get("sub"),
-            "role": payload.get("role")
-        }
-    except Exception as e:
-        err_name = e.__class__.__name__
-        err_text = str(e)
-        if err_name == "ExpiredSignatureError" or "expired" in err_text.lower():
-            raise HTTPException(status_code=401, detail="Token expired")
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
-
-
-def get_current_user_optional(token: str = Depends(oauth2_scheme)):
-    return decode_access_token(token)
 # ENDPOINTS
 
 @app.get("/query")
-async def generate(req: QueryRequest = Depends(), token: str = ""):
+async def generate(req: QueryRequest = Depends(), current_user: dict = Depends(get_current_user)):
     client_q = asyncio.Queue()
-
-    if not token:
-        raise HTTPException(status_code=401, detail="Login required")
-
-    _current_user = decode_access_token(token)
 
     prompt = req.prompt.strip()
 
@@ -311,6 +223,7 @@ async def generate(req: QueryRequest = Depends(), token: str = ""):
         requests_by_id[request_id] = {
             "prompt": prompt,
             "client_q": client_q,
+            "user_context": current_user,
             "disconnected": False,
         }
         waiting_request_ids.append(request_id)
@@ -425,7 +338,9 @@ def returnFile():
     except Exception as e:
         print(f"[SERVER] Error during FileResponse: {e}")
         logging.info(f"[SERVER] Error during FileResponse: {e}")
-        raise HTTPException(status_code=500)
+        if isinstance(e, HTTPException):
+            raise e
+        raise HTTPException(status_code=500, detail="Download failed")
 
 
 @app.post("/stop")
@@ -450,27 +365,49 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-
-from pydantic import BaseModel
-
-
 class LocalLoginRequest(BaseModel):
-    username: str
+    employee_code: str
     password: str
 
 
 @app.post("/login-local")
 def login_local(data: LocalLoginRequest):
-    user = authenticate_user(data.username, data.password)
+    try:
+        user = authenticate_user(data.employee_code, data.password)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"[SERVER] Login error: {e}")
+        raise HTTPException(status_code=500, detail="Login failed")
 
     if not user:
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    token = create_access_token(user["username"], user["role"])
+    token = create_access_token(user)
 
     return {"access_token": token}
+
+
+class RegisterRequest(BaseModel):
+    name: str
+    employee_code: str
+    password: str
+
+
+@app.post("/register")
+def register(data: RegisterRequest):
+    try:
+        created = register_user(data.name, data.employee_code, data.password)
+        return {
+            "message": "Registration successful",
+            "employee_code": created["employee_code"],
+            "role": created["role"],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"[SERVER] Registration error: {e}")
+        raise HTTPException(status_code=500, detail="Registration failed")
 
 app.mount("/", StaticFiles(directory = "static", html = True), name = "static")
 if __name__ == "__main__":
