@@ -71,7 +71,7 @@
       padding: 12px;
       display: grid;
       gap: 10px;
-      grid-template-columns: 120px 1fr 1fr auto;
+      grid-template-columns: 120px 1fr 1fr 1fr auto;
       align-items: center;
     }
 
@@ -103,7 +103,7 @@
     button:hover:enabled { filter: brightness(1.08); transform: translateY(-1px); }
     button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
 
-    .login-status { font-size: 12px; color: var(--muted); min-height: 1em; }
+    .login-status { font-size: 12px; color: var(--muted); min-height: 1em; grid-column: 1 / -1; }
 
     .terminal {
       border: 1px solid var(--line);
@@ -256,9 +256,18 @@
       <p class="sys-sub">Queue-aware streaming console for natural language query processing.</p>
     </header>
 
+    <section class="login" id="register-section">
+      <div class="login-label">REGISTER</div>
+      <input type="text" id="reg-name" placeholder="name" autocomplete="name" />
+      <input type="text" id="reg-employee-code" placeholder="employee code" autocomplete="username" />
+      <input type="password" id="reg-password" placeholder="create password" autocomplete="new-password" />
+      <button id="registerBtn" onclick="registerUser()">Register</button>
+      <div class="login-status" id="register-status">Create an account.</div>
+    </section>
+
     <section class="login" id="login-section">
       <div class="login-label">AUTH LOGIN</div>
-      <input type="text" id="username" placeholder="username" autocomplete="username" />
+      <input type="text" id="employee-code" placeholder="employee code" autocomplete="username" />
       <input type="password" id="password" placeholder="password" autocomplete="current-password" />
       <button id="loginBtn" onclick="login()">Login</button>
       <div class="login-status" id="login-status">Not logged in.</div>
@@ -329,7 +338,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
   <script>
-    let activeSource = null;
+    let activeStream = null;
     let accessToken = null;
     let currentUser = null;
     let currentRole = null;
@@ -416,14 +425,49 @@
       }
     }
 
+    async function registerUser() {
+      const name = document.getElementById("reg-name").value.trim();
+      const employee_code = document.getElementById("reg-employee-code").value.trim();
+      const password = document.getElementById("reg-password").value;
+      const statusEl = document.getElementById("register-status");
+      const btn = document.getElementById("registerBtn");
+
+      if (!name || !employee_code || !password) {
+        statusEl.innerText = "Name, employee code and password are required.";
+        return;
+      }
+
+      btn.disabled = true;
+      statusEl.innerText = "Registering...";
+
+      try {
+        const response = await fetch("/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, employee_code, password })
+        });
+
+        const data = await response.json().catch(() => ({}));
+        if (response.ok) {
+          statusEl.innerText = `Registered (${data.role || "user"}). You can log in now.`;
+        } else {
+          statusEl.innerText = (data && data.detail) ? `Registration failed: ${data.detail}` : "Registration failed.";
+        }
+      } catch (err) {
+        statusEl.innerText = `Registration error: ${err.message}`;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
     async function login() {
-      const username = document.getElementById("username").value.trim();
+      const employee_code = document.getElementById("employee-code").value.trim();
       const password = document.getElementById("password").value;
       const statusEl = document.getElementById("login-status");
       const btn = document.getElementById("loginBtn");
 
-      if (!username || !password) {
-        statusEl.innerText = "Username and password required.";
+      if (!employee_code || !password) {
+        statusEl.innerText = "Employee code and password required.";
         return;
       }
 
@@ -434,14 +478,16 @@
         const response = await fetch("/login-local", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ username, password })
+          body: JSON.stringify({ employee_code, password })
         });
 
         const data = await response.json().catch(() => ({}));
         if (response.ok && data.access_token) {
           accessToken = data.access_token;
           const payload = parseJwtPayload(accessToken) || {};
-          currentUser = payload.sub || username;
+          const code = payload.sub || employee_code;
+          const name = payload.name || "";
+          currentUser = name ? `${name} (${code})` : code;
           currentRole = payload.role || "user";
 
           document.getElementById("whoami").innerText = currentUser;
@@ -485,87 +531,133 @@
       const askBtn = document.getElementById("askBtn");
       askBtn.disabled = true;
 
-      if (activeSource) {
-        activeSource.close();
-        activeSource = null;
+      if (activeStream) {
+        activeStream.abort();
+        activeStream = null;
       }
 
       setSystemStatus("processing", "stream opening");
 
       try {
-        const source = new EventSource(`/query?prompt=${encodeURIComponent(q)}&token=${encodeURIComponent(accessToken)}`);
-        activeSource = source;
-
-        source.addEventListener("queue", (evt) => {
-          try {
-            const data = JSON.parse(evt.data);
-            setQueue(data);
-            if (data.status === "processing") setSystemStatus("processing", "request in worker");
-          } catch (_) {
-            setQueue({ status: "queued" });
-          }
+        const controller = new AbortController();
+        activeStream = controller;
+        const response = await fetch(`/query?prompt=${encodeURIComponent(q)}`, {
+          method: "GET",
+          headers: {
+            "Authorization": `Bearer ${accessToken}`,
+            "Accept": "text/event-stream"
+          },
+          signal: controller.signal
         });
 
-        source.addEventListener("chunk", (evt) => {
-          try {
-            const data = JSON.parse(evt.data);
-            appendChunk(data.text || "");
-          } catch (_) {
-            appendChunk(evt.data || "");
-          }
-        });
-
-        source.addEventListener("server_error", (evt) => {
-          let msg = "stream error";
-          try {
-            const data = JSON.parse(evt.data);
-            msg = data.message || msg;
-          } catch (_) {}
+        if (!response.ok || !response.body) {
+          const errData = await response.json().catch(() => ({}));
+          const msg = errData.detail || `HTTP ${response.status}`;
           appendChunk(`Error: ${msg}`);
           markSessionError();
-          document.getElementById("queueStatus").innerText = "error";
-          document.getElementById("runMeta").innerText = "server_error";
           setSystemStatus("error", msg);
           askBtn.disabled = false;
-          source.close();
-          if (activeSource === source) activeSource = null;
-        });
+          activeStream = null;
+          return;
+        }
 
-        source.addEventListener("end", () => {
-          document.getElementById("queueStatus").innerText = "completed";
-          document.getElementById("runMeta").innerText = `completed at ${new Date().toLocaleTimeString()}`;
-          document.getElementById("downloadBtn").disabled = false;
-          markSessionComplete();
-          setSystemStatus("completed", "stream complete");
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        let buffer = "";
+        let completed = false;
 
-          askBtn.disabled = false;
-          source.close();
-          if (activeSource === source) activeSource = null;
+        const handleEvent = (rawEvent) => {
+          const lines = rawEvent.split("\n");
+          let eventName = "message";
+          const dataLines = [];
+          for (const line of lines) {
+            if (line.startsWith("event:")) eventName = line.slice(6).trim();
+            if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+          }
 
+          const payload = dataLines.join("\n");
+          if (!payload) return;
+
+          if (eventName === "queue") {
+            try {
+              const data = JSON.parse(payload);
+              setQueue(data);
+              if (data.status === "processing") setSystemStatus("processing", "request in worker");
+            } catch (_) {
+              setQueue({ status: "queued" });
+            }
+            return;
+          }
+
+          if (eventName === "chunk") {
+            try {
+              const data = JSON.parse(payload);
+              appendChunk(data.text || "");
+            } catch (_) {
+              appendChunk(payload);
+            }
+            return;
+          }
+
+          if (eventName === "server_error") {
+            let msg = "stream error";
+            try {
+              const data = JSON.parse(payload);
+              msg = data.message || msg;
+            } catch (_) {}
+            appendChunk(`Error: ${msg}`);
+            markSessionError();
+            document.getElementById("queueStatus").innerText = "error";
+            document.getElementById("runMeta").innerText = "server_error";
+            setSystemStatus("error", msg);
+            return;
+          }
+
+          if (eventName === "end") {
+            completed = true;
+            document.getElementById("queueStatus").innerText = "completed";
+            document.getElementById("runMeta").innerText = `completed at ${new Date().toLocaleTimeString()}`;
+            document.getElementById("downloadBtn").disabled = false;
+            markSessionComplete();
+            setSystemStatus("completed", "stream complete");
+          }
+        };
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          let splitAt = buffer.indexOf("\n\n");
+          while (splitAt !== -1) {
+            const rawEvent = buffer.slice(0, splitAt).trim();
+            buffer = buffer.slice(splitAt + 2);
+            if (rawEvent) handleEvent(rawEvent);
+            splitAt = buffer.indexOf("\n\n");
+          }
+        }
+
+        if (!completed) {
+          document.getElementById("queueStatus").innerText = "disconnected";
+          setSystemStatus("disconnected", "stream ended unexpectedly");
+          markSessionError();
+        } else {
           setTimeout(() => {
-            if (!activeSource && accessToken) {
+            if (!activeStream && accessToken) {
               setSystemStatus("connected", `authenticated as ${currentUser || "user"}`);
             }
           }, 3000);
-        });
+        }
 
-        source.onerror = () => {
-          if (activeSource !== source) return;
-          if (document.getElementById("queueStatus").innerText !== "completed") {
-            document.getElementById("queueStatus").innerText = "disconnected";
-            setSystemStatus("disconnected", "stream lost");
-            markSessionError();
-          }
-          askBtn.disabled = false;
-          source.close();
-          activeSource = null;
-        };
+        askBtn.disabled = false;
+        activeStream = null;
       } catch (err) {
         appendChunk(`Error: ${err.message}`);
         markSessionError();
         document.getElementById("queueStatus").innerText = "error";
         setSystemStatus("error", "failed to start stream");
         askBtn.disabled = false;
+        activeStream = null;
       }
     }
 
@@ -603,6 +695,10 @@
 
     document.getElementById("password").addEventListener("keydown", (e) => {
       if (e.key === "Enter") login();
+    });
+
+    document.getElementById("reg-password").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") registerUser();
     });
 
     setTotalQueries(getTotalQueries());
